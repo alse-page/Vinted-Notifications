@@ -8,20 +8,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import get_logger
 import proxies
 
-from seleniumbase import SB
+# Берем легкую библиотеку для обхода Datadome вместо тяжелого браузера
+from curl_cffi import requests as cffi_requests
 
 logger = get_logger(__name__)
-
-class DummyResponse:
-    def __init__(self, text, status_code, headers=None):
-        self.text = text
-        self.status_code = status_code
-        self.headers = headers or {}
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            from requests.exceptions import HTTPError
-            raise HTTPError(f"HTTP Error: {self.status_code}")
 
 class Requester:
     def __init__(self, debug=False):
@@ -44,38 +34,37 @@ class Requester:
             tried += 1
             proxy_str = proxies.get_random_proxy()
             
-            sb_proxy = proxy_str.replace("http://", "").replace("https://", "") if proxy_str else None
+            cffi_proxies = None
+            if proxy_str:
+                cffi_proxies = {"http": proxy_str, "https": proxy_str}
 
-            logger.warning(f"DEBUG SeleniumBase GET attempt {tried}/{self.MAX_RETRIES} for {url} via {sb_proxy}")
+            logger.warning(f"DEBUG curl_cffi GET attempt {tried}/{self.MAX_RETRIES} for {url} via {proxy_str}")
 
-            old_cwd = os.getcwd()
             try:
-                # Временно уходим в /tmp, чтобы избежать ошибки Read-only file system
-                os.chdir("/tmp")
+                # impersonate="chrome120" заставляет сервер думать, что мы настоящий Chrome
+                response = cffi_requests.get(
+                    url,
+                    proxies=cffi_proxies,
+                    impersonate="chrome120",
+                    timeout=15
+                )
                 
-                # Легковесный режим headless2=True, который не роняет сервер
-                with SB(uc=True, proxy=sb_proxy, headless2=True, page_load_strategy="eager") as sb:
-                    sb.driver.get(url)
+                html = response.text
+                
+                if "datadome" in html.lower() and "Just a moment" in html:
+                    logger.warning(f"Datadome challenge still present on attempt {tried}")
                     time.sleep(random.uniform(2.0, 4.0))
+                    continue
                     
-                    html = sb.driver.page_source
-                    
-                    if "datadome" in html.lower() and "Just a moment" in html:
-                        logger.warning(f"Datadome challenge still present on attempt {tried}")
-                        time.sleep(random.uniform(1.0, 2.0))
-                        continue
-                        
-                    return DummyResponse(text=html, status_code=200)
+                return response
 
             except Exception as e:
-                logger.error(f"SeleniumBase Error on attempt {tried}: {e}")
-            finally:
-                os.chdir(old_cwd)
+                logger.error(f"curl_cffi Error on attempt {tried}: {e}")
             
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(random.uniform(1.0, 3.0))
 
         from requests.exceptions import HTTPError
-        raise HTTPError(f"Failed to get a valid response via SeleniumBase after {self.MAX_RETRIES} attempts")
+        raise HTTPError(f"Failed to get a valid response via curl_cffi after {self.MAX_RETRIES} attempts")
 
     def post(self, url, params=None):
         pass
