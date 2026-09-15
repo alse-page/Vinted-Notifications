@@ -22,9 +22,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && seleniumbase get chromedriver
 
-# --- ХИТРОСТЬ ПРОТИВ READ-ONLY: Делаем ярлык папки драйверов на /tmp ---
-RUN mv /usr/local/lib/python3.11/site-packages/seleniumbase/drivers /usr/local/lib/python3.11/site-packages/seleniumbase/drivers_orig \
- && ln -s /tmp/sb_drivers /usr/local/lib/python3.11/site-packages/seleniumbase/drivers
+# Создаем и патчим uc_driver заранее, пока есть права записи
+RUN python -c "import os, shutil; \
+from seleniumbase.undetected import patcher; \
+d = '/usr/local/lib/python3.11/site-packages/seleniumbase/drivers'; \
+c = os.path.join(d, 'chromedriver'); \
+u = os.path.join(d, 'uc_driver'); \
+shutil.copy(c, u); \
+os.chmod(u, 0o755); \
+patcher.Patcher(executable_path=u).patch_exe()"
 
 COPY . .
 
