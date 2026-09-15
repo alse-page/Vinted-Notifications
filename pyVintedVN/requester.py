@@ -48,8 +48,12 @@ class Requester:
 
             logger.warning(f"DEBUG SeleniumBase GET attempt {tried}/{self.MAX_RETRIES} for {url} via {sb_proxy}")
 
+            old_cwd = os.getcwd()
             try:
-                # Используем headless2=True (новый легковесный режим) без ошибочных флагов
+                # Временно уходим в /tmp, чтобы избежать ошибки Read-only file system
+                os.chdir("/tmp")
+                
+                # Легковесный режим headless2=True, который не роняет сервер
                 with SB(uc=True, proxy=sb_proxy, headless2=True, page_load_strategy="eager") as sb:
                     sb.driver.get(url)
                     time.sleep(random.uniform(2.0, 4.0))
@@ -65,6 +69,8 @@ class Requester:
 
             except Exception as e:
                 logger.error(f"SeleniumBase Error on attempt {tried}: {e}")
+            finally:
+                os.chdir(old_cwd)
             
             time.sleep(random.uniform(0.5, 1.5))
 
