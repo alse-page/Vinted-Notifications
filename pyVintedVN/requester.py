@@ -1,18 +1,8 @@
 import sys
 import os
-import shutil
 import random
 import time
 from urllib.parse import urlencode
-
-# --- АВТОМАТИЧЕСКИ ПЕРЕНОСИМ ДРАЙВЕРЫ В ОТКРЫТУЮ ПАПКУ ---
-orig_drivers = "/usr/local/lib/python3.11/site-packages/seleniumbase/drivers_orig"
-tmp_drivers = "/tmp/sb_drivers"
-if os.path.exists(orig_drivers) and not os.path.exists(tmp_drivers):
-    try:
-        shutil.copytree(orig_drivers, tmp_drivers)
-    except Exception as e:
-        pass
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import get_logger
@@ -60,7 +50,6 @@ class Requester:
 
             old_cwd = os.getcwd()
             try:
-                # Переходим в /tmp для защиты от ошибки downloaded_files
                 os.chdir("/tmp")
                 
                 with SB(uc=True, proxy=sb_proxy, headless=True) as sb:
