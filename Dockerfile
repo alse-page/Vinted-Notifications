@@ -4,9 +4,12 @@ ARG APP_UID=10001
 ARG APP_GID=10001
 ARG APP_USER=appuser
 
+# Заставляем логи выводиться мгновенно и даем временный "дом"
+ENV PYTHONUNBUFFERED=1
+ENV HOME=/tmp
+
 WORKDIR /app
 
-# Добавили xauth — без него xvfb-run часто падает
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gosu wget gnupg xvfb xauth curl unzip ca-certificates \
  && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
@@ -35,5 +38,5 @@ EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
-# ВОТ ОН, ГЛАВНЫЙ СЕКРЕТ: системный xvfb-run создает экран 1920x1080
-CMD ["xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24", "python", "vinted_notifications.py"]
+# Вернули обычный запуск Питона (без xvfb-run)
+CMD ["python", "vinted_notifications.py"]
