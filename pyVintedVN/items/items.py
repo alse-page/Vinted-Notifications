@@ -1,4 +1,3 @@
-
 from pyVintedVN.items.item import Item
 from pyVintedVN.requester import requester
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
@@ -12,6 +11,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Куда сохранять сырой HTML при пустой выдаче (для диагностики)
 DEBUG_DUMP_PATH = "/app/logs/last_response_debug.html"
 
 
@@ -46,6 +46,7 @@ class Items:
             html = response.text
             items = []
 
+            # Современный Vinted прячет все данные страницы в скрипте с id="__NEXT_DATA__"
             match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
             if match:
                 try:
@@ -54,6 +55,7 @@ class Items:
                 except Exception as e:
                     logger.error(f"Error parsing Next.js JSON: {e}")
 
+            # Запасной вариант: ищем любые другие json скрипты, если в __NEXT_DATA__ пусто
             if not items:
                 scripts_content = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
                 for script in scripts_content:
@@ -65,18 +67,36 @@ class Items:
                     except Exception:
                         continue
 
+            # ================= ДИАГНОСТИКА v2 (можно удалить после фикса) =================
             if not items:
+                title_match = re.search(r'<title[^>]*>(.*?)</title>', html, re.DOTALL | re.IGNORECASE)
+                title = title_match.group(1).strip()[:200] if title_match else None
+
+                # Ищем контекст вокруг первого упоминания datadome/captcha, чтобы понять,
+                # это реальный челлендж или просто штатный тег защиты на легитимной странице
+                dd_idx = html.lower().find("datadome")
+                dd_context = html[max(0, dd_idx - 150):dd_idx + 150] if dd_idx != -1 else None
+
                 markers = {
+                    "title": title,
                     "has_next_data_tag": "__NEXT_DATA__" in html,
                     "has_react_on_rails": "data-js-react-on-rails-store" in html,
                     "has_datadome": ("datadome" in html.lower()),
                     "has_captcha": ("captcha" in html.lower()),
                     "has_challenge_words": any(w in html for w in ["Just a moment", "Checking your browser", "Access denied", "Attention Required"]),
                     "has_any_json_script": bool(re.findall(r'<script[^>]*type="application/json"', html, re.IGNORECASE)),
+                    # Признаки того, что это МОЖЕТ быть настоящая страница с товарами,
+                    # просто в другом формате, чем мы ищем
+                    "contains_price_word": '"price"' in html or "'price'" in html,
+                    "contains_catalog_items_word": "catalogItems" in html or "catalog_items" in html,
+                    "script_tag_count": html.count("<script"),
                     "status_code": response.status_code,
+                    "response_headers": dict(response.headers),
                     "html_length": len(html),
                 }
                 logger.warning(f"DEBUG EMPTY RESULT for {target_url} -> {markers}")
+                if dd_context:
+                    logger.warning(f"DEBUG datadome context: ...{dd_context}...")
 
                 try:
                     os.makedirs(os.path.dirname(DEBUG_DUMP_PATH), exist_ok=True)
@@ -85,6 +105,7 @@ class Items:
                     logger.warning(f"DEBUG raw html saved to {DEBUG_DUMP_PATH}")
                 except Exception as e:
                     logger.warning(f"DEBUG could not save html dump: {e}")
+            # ================= /ДИАГНОСТИКА =================
 
             if not json:
                 return [Item(_item) for _item in items]
