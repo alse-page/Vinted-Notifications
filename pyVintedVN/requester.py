@@ -46,19 +46,25 @@ class Requester:
             tried += 1
             proxy_str = proxies.get_random_proxy()
             
-            # Подготавливаем прокси для Playwright
+            # Правильно разбираем прокси для Playwright
             pw_proxy = None
             if proxy_str:
-                if not proxy_str.startswith("http"):
-                    pw_proxy = {"server": f"http://{proxy_str}"}
+                clean_proxy = proxy_str.replace("http://", "").replace("https://", "")
+                if "@" in clean_proxy:
+                    auth, host = clean_proxy.split("@", 1)
+                    user, pwd = auth.split(":", 1)
+                    pw_proxy = {
+                        "server": f"http://{host}",
+                        "username": user,
+                        "password": pwd
+                    }
                 else:
-                    pw_proxy = {"server": proxy_str}
+                    pw_proxy = {"server": f"http://{clean_proxy}"}
 
             logger.warning(f"DEBUG Playwright GET attempt {tried}/{self.MAX_RETRIES} for {url} via {pw_proxy}")
 
             try:
                 with sync_playwright() as p:
-                    # Запускаем невидимый браузер
                     browser = p.chromium.launch(
                         headless=True,
                         args=[
@@ -75,12 +81,10 @@ class Requester:
                     )
                     
                     page = context.new_page()
-                    stealth_sync(page) # Применяем антидетект
+                    stealth_sync(page)
 
-                    # Идем на сайт и ждем, пока перестанут загружаться скрипты
                     response = page.goto(url, wait_until="networkidle", timeout=30000)
                     
-                    # Даем еще пару секунд на выполнение JS-проверок Datadome
                     page.wait_for_timeout(2500)
                     
                     html = page.content()
@@ -89,7 +93,6 @@ class Requester:
                     
                     browser.close()
 
-                    # Проверяем, не застряли ли мы на заглушке
                     if "datadome" in html.lower() and "Just a moment" in html:
                         logger.warning(f"Datadome challenge still present on attempt {tried}")
                         time.sleep(random.uniform(2, 4))
@@ -116,7 +119,6 @@ class Requester:
     def update_cookies(self, cookies: dict):
         pass
 
-# Алиасы для обратной совместимости
 Requester.setLocale = Requester.set_locale
 Requester.setCookies = Requester.set_cookies
 
