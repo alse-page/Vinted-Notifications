@@ -6,7 +6,7 @@ ARG APP_USER=appuser
 
 WORKDIR /app
 
-# Устанавливаем зависимости и официальный Google Chrome современным способом (без apt-key)
+# Устанавливаем зависимости и официальный Google Chrome
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gosu wget gnupg xvfb curl unzip ca-certificates \
  && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
@@ -23,6 +23,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+# --- ДАЕМ ПРАВА ПОЛЬЗОВАТЕЛЮ НА ПАПКУ ПРИЛОЖЕНИЯ ---
+RUN chown -R ${APP_USER}:${APP_USER} /app
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
