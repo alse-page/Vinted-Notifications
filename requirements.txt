@@ -4,3 +4,4 @@ apscheduler>=3.10.0
 feedgen
 flask
 cloudscraper
+curl_cffi
