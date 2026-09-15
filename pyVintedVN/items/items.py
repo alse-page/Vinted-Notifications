@@ -1,8 +1,14 @@
 from pyVintedVN.items.item import Item
 from pyVintedVN.requester import requester
-from urllib.parse import urlparse, parse_qsl
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 from requests.exceptions import HTTPError
 from typing import List, Dict, Optional
+from pyVintedVN.settings import Urls
+import json as json_module
+import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Items:
     def search(
@@ -17,28 +23,43 @@ class Items:
         locale = urlparse(url).netloc
         requester.set_locale(locale)
 
-        # Парсим параметры из твоей ссылки
-        params = self.parse_url(url, nbr_items, page, time)
-
-        # Выделяем домен (например, vinted.pt) и используем новый правильный API-путь
-        base_domain = locale.replace("www.", "")
-        api_url = f"https://api.{base_domain}/svc-catalogue/items"
+        parsed_url = urlparse(url)
+        query_params = dict(parse_qsl(parsed_url.query))
+        query_params['page'] = str(page)
+        query_params['per_page'] = str(nbr_items)
+        
+        new_query = urlencode(query_params)
+        target_url = urlunparse(parsed_url._replace(query=new_query))
 
         try:
-            # Делаем запрос через наш защищенный requester (cloudscraper)
-            response = requester.get(url=api_url, params=params)
+            response = requester.get(url=target_url)
+            if not response or not hasattr(response, 'text'):
+                raise HTTPError("Empty response from requester")
+                
             response.raise_for_status()
 
-            data = response.json()
-            
-            # Универсальный сбор товаров из нового ответа API
             items = []
-            if "items" in data:
-                items = data["items"]
-            elif "catalogItems" in data and "items" in data["catalogItems"]:
-                items = data["catalogItems"]["items"]
-            elif isinstance(data, list):
-                items = data
+            
+            # Современный Vinted прячет все данные страницы в скрипте с id="__NEXT_DATA__"
+            match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', response.text, re.DOTALL)
+            if match:
+                try:
+                    data = json_module.loads(match.group(1))
+                    items = self._find_items_in_json(data)
+                except Exception as e:
+                    logger.error(f"Error parsing Next.js JSON: {e}")
+
+            # Запасной вариант: ищем любые другие json скрипты, если в __NEXT_DATA__ пусто
+            if not items:
+                scripts_content = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', response.text, re.DOTALL | re.IGNORECASE)
+                for script in scripts_content:
+                    try:
+                        data = json_module.loads(script)
+                        items = self._find_items_in_json(data)
+                        if items:
+                            break
+                    except Exception:
+                        continue
 
             if not json:
                 return [Item(_item) for _item in items]
@@ -46,7 +67,26 @@ class Items:
                 return items
 
         except Exception as err:
-            raise HTTPError(f"API Request failed: {err}")
+            raise HTTPError(f"HTML scraping failed: {err}")
+
+    def _find_items_in_json(self, data):
+        """Рекурсивно ищет ключи с товарами в структуре JSON"""
+        if isinstance(data, dict):
+            for key in ['items', 'catalogItems', 'products']:
+                if key in data and isinstance(data[key], list) and len(data[key]) > 0:
+                    sample = data[key][0]
+                    if isinstance(sample, dict) and ('id' in sample or 'title' in sample or 'price' in sample):
+                        return data[key]
+            for v in data.values():
+                res = self._find_items_in_json(v)
+                if res:
+                    return res
+        elif isinstance(data, list):
+            for item in data:
+                res = self._find_items_in_json(item)
+                if res:
+                    return res
+        return []
 
     def parse_url(
         self, url: str, nbr_items: int = 20, page: int = 1, time: Optional[int] = None
