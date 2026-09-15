@@ -17,9 +17,18 @@ RUN groupadd -g ${APP_GID} ${APP_USER} \
  && useradd -u ${APP_UID} -g ${APP_GID} -M ${APP_USER} \
  && mkdir -p /app/data /app/logs
 
+# --- УСТАНОВКА БРАУЗЕРА PLAYWRIGHT ---
+# Указываем глобальную папку для браузера, чтобы appuser имел к ней доступ
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN mkdir -p /ms-playwright && chmod 777 /ms-playwright
+
 # Copy requirements first for better caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Устанавливаем Python-библиотеки, скачиваем браузер Chromium и его системные зависимости
+RUN pip install --no-cache-dir -r requirements.txt \
+ && playwright install chromium \
+ && playwright install-deps chromium \
+ && chmod -R 777 /ms-playwright
 
 # Copy the rest of the application
 COPY . .
