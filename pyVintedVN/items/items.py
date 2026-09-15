@@ -1,14 +1,8 @@
 from pyVintedVN.items.item import Item
 from pyVintedVN.requester import requester
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+from urllib.parse import urlparse, parse_qsl
 from requests.exceptions import HTTPError
 from typing import List, Dict, Optional
-from pyVintedVN.settings import Urls
-import json as json_module
-import re
-import logging
-
-logger = logging.getLogger(__name__)
 
 class Items:
     def search(
@@ -23,40 +17,28 @@ class Items:
         locale = urlparse(url).netloc
         requester.set_locale(locale)
 
-        parsed_url = urlparse(url)
-        query_params = dict(parse_qsl(parsed_url.query))
-        query_params['page'] = str(page)
-        query_params['per_page'] = str(nbr_items)
-        
-        new_query = urlencode(query_params)
-        target_url = urlunparse(parsed_url._replace(query=new_query))
+        # Парсим параметры из твоей ссылки
+        params = self.parse_url(url, nbr_items, page, time)
+
+        # Выделяем домен (например, vinted.pt) и используем новый правильный API-путь
+        base_domain = locale.replace("www.", "")
+        api_url = f"https://api.{base_domain}/svc-catalogue/items"
 
         try:
-            response = requester.get(url=target_url)
-            if not response or not hasattr(response, 'text'):
-                raise HTTPError("Empty response from requester")
-                
+            # Делаем запрос через наш защищенный requester (cloudscraper)
+            response = requester.get(url=api_url, params=params)
             response.raise_for_status()
 
-            items = []
+            data = response.json()
             
-            # Ищем все application/json скрипты
-            scripts_content = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', response.text, re.DOTALL | re.IGNORECASE)
-
-            for script_content in scripts_content:
-                try:
-                    data = json_module.loads(script_content)
-                    if isinstance(data, dict):
-                        # ДИАГНОСТИКА: Выводим главные ключи первого крупного JSON в лог
-                        if len(data.keys()) > 2:
-                            logger.info(f"DEBUG JSON Keys found: {list(data.keys())}")
-                        
-                        found_items = self._extract_items_recursive(data)
-                        if found_items:
-                            items = found_items
-                            break
-                except (json_module.JSONDecodeError, TypeError):
-                    continue
+            # Универсальный сбор товаров из нового ответа API
+            items = []
+            if "items" in data:
+                items = data["items"]
+            elif "catalogItems" in data and "items" in data["catalogItems"]:
+                items = data["catalogItems"]["items"]
+            elif isinstance(data, list):
+                items = data
 
             if not json:
                 return [Item(_item) for _item in items]
@@ -64,26 +46,7 @@ class Items:
                 return items
 
         except Exception as err:
-            raise HTTPError(f"Error scraping HTML: {err}")
-
-    def _extract_items_recursive(self, data):
-        if isinstance(data, dict):
-            # Проверяем расширенный список возможных ключей товаров
-            for key in ['items', 'catalogItems', 'products', 'catalog_items', 'edges', 'nodes']:
-                if key in data and isinstance(data[key], list) and len(data[key]) > 0:
-                    sample = data[key][0]
-                    if isinstance(sample, dict) and any(k in sample for k in ['id', 'title', 'price', 'url']):
-                        return data[key]
-            for k, v in data.items():
-                res = self._extract_items_recursive(v)
-                if res:
-                    return res
-        elif isinstance(data, list):
-            for item in data:
-                res = self._extract_items_recursive(item)
-                if res:
-                    return res
-        return None
+            raise HTTPError(f"API Request failed: {err}")
 
     def parse_url(
         self, url: str, nbr_items: int = 20, page: int = 1, time: Optional[int] = None
