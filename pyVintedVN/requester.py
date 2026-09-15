@@ -12,6 +12,7 @@ from seleniumbase import SB
 
 logger = get_logger(__name__)
 
+
 class DummyResponse:
     def __init__(self, text, status_code, headers=None):
         self.text = text
@@ -22,6 +23,7 @@ class DummyResponse:
         if self.status_code >= 400:
             from requests.exceptions import HTTPError
             raise HTTPError(f"HTTP Error: {self.status_code}")
+
 
 class Requester:
     def __init__(self, debug=False):
@@ -43,35 +45,36 @@ class Requester:
         while tried < self.MAX_RETRIES:
             tried += 1
             proxy_str = proxies.get_random_proxy()
-            
+
             sb_proxy = proxy_str.replace("http://", "").replace("https://", "") if proxy_str else None
 
             logger.warning(f"DEBUG SeleniumBase GET attempt {tried}/{self.MAX_RETRIES} for {url} via {sb_proxy}")
 
             old_cwd = os.getcwd()
             try:
-                # Переходим в /tmp для защиты от ошибки downloaded_files
                 os.chdir("/tmp")
-                
-                # Запускаем с xvfb=True (виртуальный монитор) вместо headless=True
+
+                # CHANGED: xvfb=True вместо headless=True — рекомендация SeleniumBase
+                # для UC-режима на headless Linux-серверах (более стабильный запуск
+                # Chrome и меньше шансов спалиться на детекции headless-браузера).
                 with SB(uc=True, proxy=sb_proxy, xvfb=True) as sb:
                     sb.driver.get(url)
                     time.sleep(random.uniform(5.0, 8.0))
-                    
+
                     html = sb.driver.page_source
-                    
+
                     if "datadome" in html.lower() and "Just a moment" in html:
                         logger.warning(f"Datadome challenge still present on attempt {tried}")
                         time.sleep(random.uniform(2, 4))
                         continue
-                        
+
                     return DummyResponse(text=html, status_code=200)
 
             except Exception as e:
                 logger.error(f"SeleniumBase Error on attempt {tried}: {e}")
             finally:
                 os.chdir(old_cwd)
-            
+
             time.sleep(random.uniform(1, 3))
 
         from requests.exceptions import HTTPError
@@ -85,6 +88,7 @@ class Requester:
 
     def update_cookies(self, cookies: dict):
         pass
+
 
 Requester.setLocale = Requester.set_locale
 Requester.setCookies = Requester.set_cookies
