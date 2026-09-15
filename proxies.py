@@ -115,7 +115,18 @@ def get_random_proxy() -> Optional[str]:
                     return _SINGLE_PROXY
                 return random.choice(working_proxies)
             else:
-                logger.warning("DEBUG: ALL proxies failed the challenge-aware check!")
+                # ВАЖНО: если проверка не прошла ни одна, но прокси всё равно
+                # единственный доступный вариант — используем его, а не идём
+                # "голым" с IP самого сервера (это ещё хуже для антибота).
+                logger.warning(
+                    "DEBUG: ALL proxies failed the challenge-aware check! "
+                    "Using them anyway since there's no better fallback than going proxy-less."
+                )
+                _PROXY_CACHE = all_proxies
+                if len(all_proxies) == 1:
+                    _SINGLE_PROXY = all_proxies[0]
+                    return _SINGLE_PROXY
+                return random.choice(all_proxies)
         else:
             _PROXY_CACHE = all_proxies
             if len(all_proxies) == 1:
