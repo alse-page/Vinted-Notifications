@@ -11,10 +11,8 @@ services:
       - VN_data:/app/data
       - VN_logs:/app/logs
     restart: unless-stopped
-    # CHANGED: read_only убран — Chrome/SeleniumBase пишут не только в /tmp,
-    # но и в домашнюю директорию (кэш, профиль браузера), а read_only:true
-    # блокировал эту запись и не давал Chrome вообще запуститься.
-    shm_size: '2gb'
+    # Снизили лимит до безопасных 512 Мегабайт
+    shm_size: '512m'
     tmpfs:
       - /tmp
 
