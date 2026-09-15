@@ -4,6 +4,10 @@ import random
 import time
 from urllib.parse import urlencode
 
+# Принудительно перенаправляем рабочие директории браузера во временную папку с правами записи
+os.environ["SB_HOME"] = "/tmp"
+os.environ["DOWNLOAD_PATH"] = "/tmp/downloaded_files"
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import get_logger
 import proxies
@@ -44,22 +48,17 @@ class Requester:
             tried += 1
             proxy_str = proxies.get_random_proxy()
             
-            # В SeleniumBase прокси передается напрямую в формате user:pass@host:port
             sb_proxy = proxy_str.replace("http://", "").replace("https://", "") if proxy_str else None
 
             logger.warning(f"DEBUG SeleniumBase GET attempt {tried}/{self.MAX_RETRIES} for {url} via {sb_proxy}")
 
             try:
-                # Запускаем браузер в режиме UC (Undetected Chromedriver) с виртуальным монитором
                 with SB(uc=True, proxy=sb_proxy, headless=True) as sb:
                     sb.driver.get(url)
-                    
-                    # Даем скриптам Datadome время на выполнение в фоне
                     time.sleep(random.uniform(5.0, 8.0))
                     
                     html = sb.driver.page_source
                     
-                    # Проверяем, не застряли ли мы на заглушке
                     if "datadome" in html.lower() and "Just a moment" in html:
                         logger.warning(f"Datadome challenge still present on attempt {tried}")
                         time.sleep(random.uniform(2, 4))
