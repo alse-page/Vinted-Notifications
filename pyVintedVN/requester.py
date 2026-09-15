@@ -48,11 +48,7 @@ class Requester:
 
             logger.warning(f"DEBUG SeleniumBase GET attempt {tried}/{self.MAX_RETRIES} for {url} via {sb_proxy}")
 
-            original_dir = os.getcwd()
             try:
-                # Временно переходим в /tmp, чтобы SeleniumBase мог создать downloaded_files там
-                os.chdir("/tmp")
-                
                 with SB(uc=True, proxy=sb_proxy, headless=True) as sb:
                     sb.driver.get(url)
                     time.sleep(random.uniform(5.0, 8.0))
@@ -68,8 +64,6 @@ class Requester:
 
             except Exception as e:
                 logger.error(f"SeleniumBase Error on attempt {tried}: {e}")
-            finally:
-                os.chdir(original_dir)
             
             time.sleep(random.uniform(1, 3))
 
