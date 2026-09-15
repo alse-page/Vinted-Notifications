@@ -11,10 +11,6 @@ services:
       - VN_data:/app/data
       - VN_logs:/app/logs
     restart: unless-stopped
-    # Снизили лимит до безопасных 512 Мегабайт
-    shm_size: '512m'
-    tmpfs:
-      - /tmp
 
 volumes:
   VN_data:
