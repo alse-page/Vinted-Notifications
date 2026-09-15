@@ -1,221 +1,123 @@
-import json
-import proxies
 import sys
 import os
-import db
 import random
 import time
-from curl_cffi import requests as cf_requests
-from requests.exceptions import HTTPError
+from urllib.parse import urlencode
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import get_logger
+import proxies
+
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import stealth_sync
 
 logger = get_logger(__name__)
 
-# Маркеры, по которым узнаём страницу-челлендж Datadome, даже если status_code == 200
-DATADOME_MARKERS = [
-    "datadome",
-    "Datadome",
-    "captcha-delivery.com",
-    "geo.captcha-delivery.com",
-    "Just a moment",
-    "Checking your browser",
-    "Access denied",
-    "Attention Required",
-]
+class DummyResponse:
+    """Класс-заглушка, чтобы обмануть items.py, который ждет ответ от библиотеки requests"""
+    def __init__(self, text, status_code, headers=None):
+        self.text = text
+        self.status_code = status_code
+        self.headers = headers or {}
 
-# Какого браузера Chrome прикидываться (curl_cffi поддерживает конкретные версии, не любые)
-IMPERSONATE_TARGET = "chrome124"
-
-
-def is_challenge_page(response) -> bool:
-    """Проверяет, является ли ответ Datadome-челленджем, а не настоящей страницей."""
-    if response is None:
-        return True
-    text_sample = response.text[:20000]  # маркеры всегда в начале документа/head
-    return any(marker in text_sample for marker in DATADOME_MARKERS)
-
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            from requests.exceptions import HTTPError
+            raise HTTPError(f"HTTP Error: {self.status_code}")
 
 class Requester:
-    """
-    A class for handling HTTP requests to Vinted.
-    Uses curl_cffi with Chrome TLS impersonation instead of cloudscraper,
-    plus content-based Datadome-challenge detection (not just status codes).
-    """
-
     def __init__(self, debug=False):
-        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        import db
-
-        user_agents_json = db.get_parameter("user_agents")
-        default_headers_json = db.get_parameter("default_headers")
-
-        user_agents = json.loads(user_agents_json) if user_agents_json else []
-        default_headers = (
-            json.loads(default_headers_json) if default_headers_json else {}
-        )
-
-        self.HEADER = {
-            "User-Agent": random.choice(user_agents) if user_agents else "Mozilla/5.0",
-            **(default_headers or {}),
-            "Host": "www.vinted.fr",
-        }
-        self.VINTED_AUTH_URL = "https://www.vinted.fr/"
-        self.MAX_RETRIES = 3
-
-        # CHANGED: curl_cffi вместо cloudscraper — подделывает TLS/JA3 отпечаток под реальный Chrome
-        self.session = cf_requests.Session(impersonate=IMPERSONATE_TARGET)
-        self.session.headers.update(self.HEADER)
         self.debug = debug
-        self._warmed_up = False
-
-        if self.debug:
-            logger.debug(f"Using User-Agent: {self.HEADER['User-Agent']}")
+        self.MAX_RETRIES = 3
+        self.VINTED_AUTH_URL = "https://www.vinted.fr/"
 
     def set_locale(self, locale):
-        """
-        Set the locale of the requester.
-        """
         self.VINTED_AUTH_URL = f"https://{locale}/"
-        user_agents_json = db.get_parameter("user_agents")
-        default_headers_json = db.get_parameter("default_headers")
-
-        user_agents = json.loads(user_agents_json) if user_agents_json else []
-        default_headers = (
-            json.loads(default_headers_json) if default_headers_json else {}
-        )
-
-        self.HEADER = {
-            "User-Agent": random.choice(user_agents) if user_agents else "Mozilla/5.0",
-            **(default_headers or {}),
-            "Host": f"{locale}",
-        }
-        self.session.headers.update(self.HEADER)
-        self._warmed_up = False  # locale сменился -> нужно заново прогреть куки для этого домена
         if self.debug:
-            logger.debug(
-                f"Locale set to {locale} with User-Agent: {self.HEADER['User-Agent']}"
-            )
-
-    def _configure_proxy(self):
-        proxy_configured = proxies.configure_proxy(self.session)
-        if self.debug and proxy_configured:
-            logger.debug(f"Using proxy: {self.session.proxies}")
-        return proxy_configured
-
-    def _warm_up_session(self):
-        """Заходит на главную страницу домена, чтобы получить настоящие Datadome-куки
-        до того, как бить по catalog-эндпоинтам напрямую."""
-        try:
-            self.session.get(self.VINTED_AUTH_URL, impersonate=IMPERSONATE_TARGET)
-            self._warmed_up = True
-            if self.debug:
-                logger.debug(f"Warmed up session on {self.VINTED_AUTH_URL}")
-        except Exception:
-            if self.debug:
-                logger.error("Warm-up request failed", exc_info=True)
-
-    def _reset_session(self, reason=""):
-        """Полностью пересоздаёт сессию: новый impersonate-контекст + новый прокси из ротации."""
-        self.session = cf_requests.Session(impersonate=IMPERSONATE_TARGET)
-        self.session.headers.update(self.HEADER)
-        self._configure_proxy()
-        self._warmed_up = False
-        if self.debug:
-            logger.debug(f"Session reset ({reason})")
+            logger.debug(f"Locale set to {locale}")
 
     def get(self, url, params=None):
-        """
-        Make a GET request with retry logic, including Datadome-challenge detection.
-        """
-        self._configure_proxy()
+        if params:
+            query_string = urlencode(params)
+            url = f"{url}&{query_string}" if "?" in url else f"{url}?{query_string}"
 
         tried = 0
         while tried < self.MAX_RETRIES:
             tried += 1
+            proxy_str = proxies.get_random_proxy()
+            
+            # Подготавливаем прокси для Playwright
+            pw_proxy = None
+            if proxy_str:
+                if not proxy_str.startswith("http"):
+                    pw_proxy = {"server": f"http://{proxy_str}"}
+                else:
+                    pw_proxy = {"server": proxy_str}
 
-            # ВАЖНО: проверяем прогрев на КАЖДОЙ попытке, а не только один раз до цикла —
-            # иначе после reset_session() ретрай идёт с холодной сессией без кук.
-            if not self._warmed_up:
-                logger.warning(f"DEBUG: warming up session before attempt {tried} for host {url.split('/')[2]}")
-                self._warm_up_session()
-                time.sleep(random.uniform(0.5, 1.5))
+            logger.warning(f"DEBUG Playwright GET attempt {tried}/{self.MAX_RETRIES} for {url} via {pw_proxy}")
 
-            response = self.session.get(url, params=params, impersonate=IMPERSONATE_TARGET)
-            logger.warning(
-                f"DEBUG: attempt {tried}/{self.MAX_RETRIES} status={response.status_code} "
-                f"cookies_count={len(self.session.cookies)} is_challenge={is_challenge_page(response)} "
-                f"proxy={self.session.proxies if hasattr(self.session, 'proxies') else 'n/a'}"
-            )
-
-            if is_challenge_page(response):
-                logger.warning(
-                    f"Datadome challenge detected (attempt {tried}/{self.MAX_RETRIES}) for {url}"
-                )
-                self._reset_session(reason="datadome challenge")
-                time.sleep(random.uniform(1.0, 3.0))
-                continue
-
-            if response.status_code in (401, 404) and tried < self.MAX_RETRIES:
-                if self.debug:
-                    logger.debug(f"Cookies invalid retrying {tried}/{self.MAX_RETRIES}")
-                self.set_cookies()
-                continue
-            elif response.status_code == 200:
-                return response
-            elif tried == self.MAX_RETRIES:
-                if response.status_code in (401, 403):
-                    logger.error(
-                        f"Received {response.status_code} error for URL: {url}\n"
-                        f"Response headers: {dict(response.headers)}\n"
-                        f"Response body (first 500 chars): {response.text[:500]}"
+            try:
+                with sync_playwright() as p:
+                    # Запускаем невидимый браузер
+                    browser = p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--no-sandbox", 
+                            "--disable-setuid-sandbox", 
+                            "--disable-blink-features=AutomationControlled"
+                        ]
                     )
-                    self._reset_session(reason=f"{response.status_code} on final retry")
-                return response
+                    
+                    context = browser.new_context(
+                        proxy=pw_proxy,
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                        viewport={'width': 1920, 'height': 1080}
+                    )
+                    
+                    page = context.new_page()
+                    stealth_sync(page) # Применяем антидетект
 
-        raise HTTPError(
-            f"Failed to get a valid (non-challenge) response after {self.MAX_RETRIES} attempts"
-        )
+                    # Идем на сайт и ждем, пока перестанут загружаться скрипты
+                    response = page.goto(url, wait_until="networkidle", timeout=30000)
+                    
+                    # Даем еще пару секунд на выполнение JS-проверок Datadome
+                    page.wait_for_timeout(2500)
+                    
+                    html = page.content()
+                    status = response.status if response else 200
+                    headers = response.headers if response else {}
+                    
+                    browser.close()
+
+                    # Проверяем, не застряли ли мы на заглушке
+                    if "datadome" in html.lower() and "Just a moment" in html:
+                        logger.warning(f"Datadome challenge still present on attempt {tried}")
+                        time.sleep(random.uniform(2, 4))
+                        continue
+                        
+                    return DummyResponse(text=html, status_code=status, headers=headers)
+
+            except PlaywrightTimeoutError:
+                logger.warning(f"Playwright Timeout on attempt {tried} for {url}")
+            except Exception as e:
+                logger.error(f"Playwright Error on attempt {tried}: {e}")
+            
+            time.sleep(random.uniform(1, 3))
+
+        from requests.exceptions import HTTPError
+        raise HTTPError(f"Failed to get a valid response via Playwright after {self.MAX_RETRIES} attempts")
 
     def post(self, url, params=None):
-        """
-        Make a POST request.
-        """
-        self._configure_proxy()
-        response = self.session.post(url, params=params, impersonate=IMPERSONATE_TARGET)
-        response.raise_for_status()
-        return response
+        pass
 
     def set_cookies(self):
-        """
-        Reset and fetch new cookies for authentication.
-        """
-        try:
-            self.session.cookies.clear()
-        except Exception:
-            pass
-        try:
-            self.session.get(self.VINTED_AUTH_URL, impersonate=IMPERSONATE_TARGET)
-            self._warmed_up = True
-            if self.debug:
-                logger.debug("Cookies set!")
-        except Exception:
-            if self.debug:
-                logger.error(
-                    "There was an error fetching cookies for vinted", exc_info=True
-                )
+        pass
 
     def update_cookies(self, cookies: dict):
-        """
-        Update the session cookies with the provided dictionary.
-        """
-        self.session.cookies.update(cookies)
-        if self.debug:
-            logger.debug(f"Cookies manually updated ({len(cookies)} cookies received)")
+        pass
 
-    setLocale = set_locale
-    setCookies = set_cookies
-
+# Алиасы для обратной совместимости
+Requester.setLocale = Requester.set_locale
+Requester.setCookies = Requester.set_cookies
 
 requester = Requester()
