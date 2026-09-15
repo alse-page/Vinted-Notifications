@@ -5,3 +5,5 @@ feedgen
 flask
 cloudscraper
 curl_cffi
+playwright
+playwright-stealth
