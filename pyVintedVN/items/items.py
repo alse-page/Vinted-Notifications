@@ -6,6 +6,10 @@ from typing import List, Dict, Optional
 from pyVintedVN.settings import Urls
 import json as json_module
 import re
+import logging
+
+# Берем логгер, чтобы писать напрямую в логи бота
+logger = logging.getLogger(__name__)
 
 class Items:
     """
@@ -24,7 +28,6 @@ class Items:
         locale = urlparse(url).netloc
         requester.set_locale(locale)
 
-        # Разбираем исходную ссылку и добавляем нужную страницу
         parsed_url = urlparse(url)
         query_params = dict(parse_qsl(parsed_url.query))
         query_params['page'] = str(page)
@@ -34,18 +37,21 @@ class Items:
         target_url = urlunparse(parsed_url._replace(query=new_query))
 
         try:
-            # Делаем запрос к обычной HTML странице, а не к API
             response = requester.get(url=target_url)
             
-            # Проверяем, не пустой ли ответ
             if not response or not hasattr(response, 'text'):
                 raise HTTPError("Empty response from requester")
                 
             response.raise_for_status()
 
+            # --- ДИАГНОСТИКА: Узнаем, что именно скачал бот ---
+            title_match = re.search(r'<title>(.*?)</title>', response.text, re.IGNORECASE)
+            page_title = title_match.group(1) if title_match else "No title"
+            logger.info(f"DEBUG Заголовок страницы: {page_title}")
+            # --------------------------------------------------
+
             items = []
             
-            # Ищем скрытые скрипты с JSON данными Vinted на странице
             scripts = re.findall(
                 r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', 
                 response.text, 
