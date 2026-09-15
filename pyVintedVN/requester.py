@@ -1,8 +1,18 @@
 import sys
 import os
+import shutil
 import random
 import time
 from urllib.parse import urlencode
+
+# --- АВТОМАТИЧЕСКИ ПЕРЕНОСИМ ДРАЙВЕРЫ В ОТКРЫТУЮ ПАПКУ ---
+orig_drivers = "/usr/local/lib/python3.11/site-packages/seleniumbase/drivers_orig"
+tmp_drivers = "/tmp/sb_drivers"
+if os.path.exists(orig_drivers) and not os.path.exists(tmp_drivers):
+    try:
+        shutil.copytree(orig_drivers, tmp_drivers)
+    except Exception as e:
+        pass
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logger import get_logger
@@ -48,10 +58,9 @@ class Requester:
 
             logger.warning(f"DEBUG SeleniumBase GET attempt {tried}/{self.MAX_RETRIES} for {url} via {sb_proxy}")
 
-            # --- ВОТ ЭТОТ БЛОК, КОТОРЫЙ Я ЗАБЫЛ В ПРОШЛЫЙ РАЗ ---
             old_cwd = os.getcwd()
             try:
-                # Временно переходим в /tmp, чтобы SeleniumBase мог создать downloaded_files там
+                # Переходим в /tmp для защиты от ошибки downloaded_files
                 os.chdir("/tmp")
                 
                 with SB(uc=True, proxy=sb_proxy, headless=True) as sb:
@@ -70,7 +79,6 @@ class Requester:
             except Exception as e:
                 logger.error(f"SeleniumBase Error on attempt {tried}: {e}")
             finally:
-                # Обязательно возвращаемся обратно, чтобы не сломать остальной код бота
                 os.chdir(old_cwd)
             
             time.sleep(random.uniform(1, 3))
