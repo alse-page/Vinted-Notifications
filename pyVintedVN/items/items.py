@@ -1,4 +1,4 @@
-ems ready to paste · PY
+
 from pyVintedVN.items.item import Item
 from pyVintedVN.requester import requester
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
@@ -9,13 +9,12 @@ import json as json_module
 import re
 import logging
 import os
- 
+
 logger = logging.getLogger(__name__)
- 
-# Куда сохранять сырой HTML при пустой выдаче (для диагностики)
+
 DEBUG_DUMP_PATH = "/app/logs/last_response_debug.html"
- 
- 
+
+
 class Items:
     def search(
         self,
@@ -25,29 +24,28 @@ class Items:
         time: Optional[int] = None,
         json: bool = False,
     ) -> List[Item]:
- 
+
         locale = urlparse(url).netloc
         requester.set_locale(locale)
- 
+
         parsed_url = urlparse(url)
         query_params = dict(parse_qsl(parsed_url.query))
         query_params['page'] = str(page)
         query_params['per_page'] = str(nbr_items)
- 
+
         new_query = urlencode(query_params)
         target_url = urlunparse(parsed_url._replace(query=new_query))
- 
+
         try:
             response = requester.get(url=target_url)
             if not response or not hasattr(response, 'text'):
                 raise HTTPError("Empty response from requester")
- 
+
             response.raise_for_status()
- 
+
             html = response.text
             items = []
- 
-            # Современный Vinted прячет все данные страницы в скрипте с id="__NEXT_DATA__"
+
             match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
             if match:
                 try:
@@ -55,8 +53,7 @@ class Items:
                     items = self._find_items_in_json(data)
                 except Exception as e:
                     logger.error(f"Error parsing Next.js JSON: {e}")
- 
-            # Запасной вариант: ищем любые другие json скрипты, если в __NEXT_DATA__ пусто
+
             if not items:
                 scripts_content = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
                 for script in scripts_content:
@@ -67,8 +64,7 @@ class Items:
                             break
                     except Exception:
                         continue
- 
-            # ================= ДИАГНОСТИКА (можно удалить после фикса) =================
+
             if not items:
                 markers = {
                     "has_next_data_tag": "__NEXT_DATA__" in html,
@@ -81,7 +77,7 @@ class Items:
                     "html_length": len(html),
                 }
                 logger.warning(f"DEBUG EMPTY RESULT for {target_url} -> {markers}")
- 
+
                 try:
                     os.makedirs(os.path.dirname(DEBUG_DUMP_PATH), exist_ok=True)
                     with open(DEBUG_DUMP_PATH, "w", encoding="utf-8") as f:
@@ -89,16 +85,15 @@ class Items:
                     logger.warning(f"DEBUG raw html saved to {DEBUG_DUMP_PATH}")
                 except Exception as e:
                     logger.warning(f"DEBUG could not save html dump: {e}")
-            # ================= /ДИАГНОСТИКА =================
- 
+
             if not json:
                 return [Item(_item) for _item in items]
             else:
                 return items
- 
+
         except Exception as err:
             raise HTTPError(f"HTML scraping failed: {err}")
- 
+
     def _find_items_in_json(self, data):
         """Рекурсивно ищет ключи с товарами в структуре JSON"""
         if isinstance(data, dict):
@@ -117,7 +112,7 @@ class Items:
                 if res:
                     return res
         return []
- 
+
     def parse_url(
         self, url: str, nbr_items: int = 20, page: int = 1, time: Optional[int] = None
     ) -> Dict:
@@ -143,5 +138,5 @@ class Items:
             "time": time,
         }
         return params
- 
+
     parseUrl = parse_url
