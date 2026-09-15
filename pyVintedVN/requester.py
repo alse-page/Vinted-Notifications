@@ -131,14 +131,23 @@ class Requester:
         """
         self._configure_proxy()
 
-        if not self._warmed_up:
-            self._warm_up_session()
-            time.sleep(random.uniform(0.5, 1.5))  # чуть более человеческий тайминг
-
         tried = 0
         while tried < self.MAX_RETRIES:
             tried += 1
+
+            # ВАЖНО: проверяем прогрев на КАЖДОЙ попытке, а не только один раз до цикла —
+            # иначе после reset_session() ретрай идёт с холодной сессией без кук.
+            if not self._warmed_up:
+                logger.warning(f"DEBUG: warming up session before attempt {tried} for host {url.split('/')[2]}")
+                self._warm_up_session()
+                time.sleep(random.uniform(0.5, 1.5))
+
             response = self.session.get(url, params=params, impersonate=IMPERSONATE_TARGET)
+            logger.warning(
+                f"DEBUG: attempt {tried}/{self.MAX_RETRIES} status={response.status_code} "
+                f"cookies_count={len(self.session.cookies)} is_challenge={is_challenge_page(response)} "
+                f"proxy={self.session.proxies if hasattr(self.session, 'proxies') else 'n/a'}"
+            )
 
             if is_challenge_page(response):
                 logger.warning(
