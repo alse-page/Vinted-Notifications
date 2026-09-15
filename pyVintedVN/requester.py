@@ -48,10 +48,13 @@ class Requester:
 
             logger.warning(f"DEBUG SeleniumBase GET attempt {tried}/{self.MAX_RETRIES} for {url} via {sb_proxy}")
 
+            # --- ВОТ ЭТОТ БЛОК, КОТОРЫЙ Я ЗАБЫЛ В ПРОШЛЫЙ РАЗ ---
+            old_cwd = os.getcwd()
             try:
-                # Убираем uc=True, если он пытается писать в защищенную папку, 
-                # либо используем стандартный SB без попыток скачивания в site-packages
-                with SB(uc=False, proxy=sb_proxy, headless=True) as sb:
+                # Временно переходим в /tmp, чтобы SeleniumBase мог создать downloaded_files там
+                os.chdir("/tmp")
+                
+                with SB(uc=True, proxy=sb_proxy, headless=True) as sb:
                     sb.driver.get(url)
                     time.sleep(random.uniform(5.0, 8.0))
                     
@@ -66,6 +69,9 @@ class Requester:
 
             except Exception as e:
                 logger.error(f"SeleniumBase Error on attempt {tried}: {e}")
+            finally:
+                # Обязательно возвращаемся обратно, чтобы не сломать остальной код бота
+                os.chdir(old_cwd)
             
             time.sleep(random.uniform(1, 3))
 
