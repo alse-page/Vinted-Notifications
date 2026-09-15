@@ -22,9 +22,10 @@ RUN groupadd -g ${APP_GID} ${APP_USER} \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# --- ЗАРАНЕЕ СКАЧИВАЕМ ДРАЙВЕР ДЛЯ SELENIUMBASE ---
+RUN seleniumbase get chromedriver
 
-# --- ДАЕМ ПРАВА ПОЛЬЗОВАТЕЛЮ НА ПАПКУ ПРИЛОЖЕНИЯ ---
+# Даем права пользователю на все папки
 RUN chown -R ${APP_USER}:${APP_USER} /app
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
