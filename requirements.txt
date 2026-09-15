@@ -5,5 +5,4 @@ feedgen
 flask
 cloudscraper
 curl_cffi
-playwright
-playwright-stealth==1.0.6
+seleniumbase
