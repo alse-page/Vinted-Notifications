@@ -14,9 +14,15 @@ RUN apt-get update \
  && apt-get install -y google-chrome-stable \
  && rm -rf /var/lib/apt/lists/*
 
+# CHANGED: -m -d /home/${APP_USER} вместо -M — Chrome/undetected-chromedriver
+# требуют существующую и доступную для записи $HOME для профиля/кэша,
+# иначе Chrome падает при старте ещё до открытия debug-порта.
 RUN groupadd -g ${APP_GID} ${APP_USER} \
- && useradd -u ${APP_UID} -g ${APP_GID} -M ${APP_USER} \
- && mkdir -p /app/data /app/logs
+ && useradd -u ${APP_UID} -g ${APP_GID} -m -d /home/${APP_USER} ${APP_USER} \
+ && mkdir -p /app/data /app/logs /home/${APP_USER} \
+ && chown -R ${APP_USER}:${APP_USER} /home/${APP_USER}
+
+ENV HOME=/home/appuser
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
