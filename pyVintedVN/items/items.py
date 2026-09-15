@@ -1,9 +1,11 @@
 from pyVintedVN.items.item import Item
 from pyVintedVN.requester import requester
-from urllib.parse import urlparse, parse_qsl
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 from requests.exceptions import HTTPError
 from typing import List, Dict, Optional
 from pyVintedVN.settings import Urls
+import json as json_module
+import re
 
 class Items:
     """
@@ -22,29 +24,57 @@ class Items:
         locale = urlparse(url).netloc
         requester.set_locale(locale)
 
-        params = self.parse_url(url, nbr_items, page, time)
-
-        base_domain = locale.replace("www.", "")
-        api_url = f"https://api.{base_domain}/svc-catalogue/items"
+        # Разбираем исходную ссылку и добавляем нужную страницу
+        parsed_url = urlparse(url)
+        query_params = dict(parse_qsl(parsed_url.query))
+        query_params['page'] = str(page)
+        query_params['per_page'] = str(nbr_items)
+        
+        new_query = urlencode(query_params)
+        target_url = urlunparse(parsed_url._replace(query=new_query))
 
         try:
-            response = requester.get(url=api_url, params=params)
-            response.raise_for_status()
-            data = response.json()
+            # Делаем запрос к обычной HTML странице, а не к API
+            response = requester.get(url=target_url)
             
-            if "items" in data:
-                items = data["items"]
-            elif "catalogItems" in data and "items" in data["catalogItems"]:
-                items = data["catalogItems"]["items"]
-            else:
-                items = []
+            # Проверяем, не пустой ли ответ
+            if not response or not hasattr(response, 'text'):
+                raise HTTPError("Empty response from requester")
+                
+            response.raise_for_status()
+
+            items = []
+            
+            # Ищем скрытые скрипты с JSON данными Vinted на странице
+            scripts = re.findall(
+                r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', 
+                response.text, 
+                re.DOTALL | re.IGNORECASE
+            )
+
+            for script_content in scripts:
+                try:
+                    data = json_module.loads(script_content)
+                    if isinstance(data, dict):
+                        if 'items' in data and isinstance(data['items'], dict) and 'catalogItems' in data['items']:
+                            items = data['items']['catalogItems']['items']
+                            break
+                        elif 'items' in data and isinstance(data['items'], list):
+                            items = data['items']
+                            break
+                        elif 'catalogItems' in data and isinstance(data['catalogItems'], dict) and 'items' in data['catalogItems']:
+                            items = data['catalogItems']['items']
+                            break
+                except (json_module.JSONDecodeError, KeyError, TypeError):
+                    continue
 
             if not json:
                 return [Item(_item) for _item in items]
             else:
                 return items
-        except HTTPError as err:
-            raise err
+
+        except Exception as err:
+            raise HTTPError(f"Error scraping HTML: {err}")
 
     def parse_url(
         self, url: str, nbr_items: int = 20, page: int = 1, time: Optional[int] = None
