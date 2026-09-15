@@ -50,9 +50,11 @@ class Requester:
 
             old_cwd = os.getcwd()
             try:
+                # Переходим в /tmp для защиты от ошибки downloaded_files
                 os.chdir("/tmp")
                 
-                with SB(uc=True, proxy=sb_proxy, headless=True) as sb:
+                # Запускаем с xvfb=True (виртуальный монитор) вместо headless=True
+                with SB(uc=True, proxy=sb_proxy, xvfb=True) as sb:
                     sb.driver.get(url)
                     time.sleep(random.uniform(5.0, 8.0))
                     
