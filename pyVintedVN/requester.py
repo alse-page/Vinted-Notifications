@@ -12,7 +12,6 @@ from seleniumbase import SB
 
 logger = get_logger(__name__)
 
-
 class DummyResponse:
     def __init__(self, text, status_code, headers=None):
         self.text = text
@@ -23,7 +22,6 @@ class DummyResponse:
         if self.status_code >= 400:
             from requests.exceptions import HTTPError
             raise HTTPError(f"HTTP Error: {self.status_code}")
-
 
 class Requester:
     def __init__(self, debug=False):
@@ -45,37 +43,41 @@ class Requester:
         while tried < self.MAX_RETRIES:
             tried += 1
             proxy_str = proxies.get_random_proxy()
-
+            
             sb_proxy = proxy_str.replace("http://", "").replace("https://", "") if proxy_str else None
 
             logger.warning(f"DEBUG SeleniumBase GET attempt {tried}/{self.MAX_RETRIES} for {url} via {sb_proxy}")
 
             old_cwd = os.getcwd()
             try:
+                # Оставляем переход в /tmp на случай, если uc_driver захочет что-то кэшировать
                 os.chdir("/tmp")
-
-                # CHANGED: xvfb=True вместо headless=True — рекомендация SeleniumBase
-                # для UC-режима на headless Linux-серверах (более стабильный запуск
-                # Chrome и меньше шансов спалиться на детекции headless-браузера).
-                with SB(uc=True, proxy=sb_proxy, xvfb=True) as sb:
+                
+                # Используем headless=False, так как виртуальный монитор обеспечит xvfb-run
+                # page_load_strategy="eager" заставит скрипт не ждать загрузки тяжелых картинок и трекеров
+                with SB(uc=True, proxy=sb_proxy, headless=False, page_load_strategy="eager") as sb:
                     sb.driver.get(url)
-                    time.sleep(random.uniform(5.0, 8.0))
-
+                    
+                    # Сокращенная пауза: ждем от 2 до 4 секунд вместо 5-8
+                    time.sleep(random.uniform(2.0, 4.0))
+                    
                     html = sb.driver.page_source
-
+                    
                     if "datadome" in html.lower() and "Just a moment" in html:
                         logger.warning(f"Datadome challenge still present on attempt {tried}")
-                        time.sleep(random.uniform(2, 4))
+                        # Если попали на капчу, ждем чуть-чуть и пробуем снова
+                        time.sleep(random.uniform(1.0, 2.0))
                         continue
-
+                        
                     return DummyResponse(text=html, status_code=200)
 
             except Exception as e:
                 logger.error(f"SeleniumBase Error on attempt {tried}: {e}")
             finally:
                 os.chdir(old_cwd)
-
-            time.sleep(random.uniform(1, 3))
+            
+            # Сокращенная пауза между попытками
+            time.sleep(random.uniform(0.5, 1.5))
 
         from requests.exceptions import HTTPError
         raise HTTPError(f"Failed to get a valid response via SeleniumBase after {self.MAX_RETRIES} attempts")
@@ -88,7 +90,6 @@ class Requester:
 
     def update_cookies(self, cookies: dict):
         pass
-
 
 Requester.setLocale = Requester.set_locale
 Requester.setCookies = Requester.set_cookies
