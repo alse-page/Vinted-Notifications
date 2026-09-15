@@ -189,11 +189,15 @@ def convert_proxy_string_to_dict(proxy: Optional[str]) -> dict:
 
     if "://" in proxy:
         protocol, address = proxy.split("://")
-        if protocol == "http":
-            return {"http": f"{proxy}", "https": f"{proxy}"}
-        return {protocol: proxy}
+        # ВАЖНО: даже если в строке была указана схема "https://", реальное
+        # соединение К ПРОКСИ должно идти по обычному HTTP (прокси сам туннелирует
+        # HTTPS-трафик через CONNECT). Использование "https://" здесь заставляет
+        # клиент пытаться сделать TLS-рукопожатие с самим прокси-сервером,
+        # который слушает как plain HTTP proxy -> WRONG_VERSION_NUMBER.
+        return {"http": f"http://{address}", "https": f"http://{address}"}
     else:
-        return {"http": f"http://{proxy}", "https": f"https://{proxy}"}
+        # Без схемы вообще — тот же самый случай, оба ключа должны быть http://
+        return {"http": f"http://{proxy}", "https": f"http://{proxy}"}
 
 
 def configure_proxy(session, proxy: Optional[str] = None) -> bool:
@@ -206,6 +210,9 @@ def configure_proxy(session, proxy: Optional[str] = None) -> bool:
 
     if isinstance(proxy, str):
         proxy = convert_proxy_string_to_dict(proxy)
+
+    session.proxies.update(proxy)
+    return True
 
     session.proxies.update(proxy)
     return True
