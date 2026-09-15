@@ -52,8 +52,16 @@ class Requester:
             try:
                 os.chdir("/tmp")
                 
-                # xvfb=True вернулся! Он сработает, так как мы добавили xauth и память 2GB
-                with SB(uc=True, proxy=sb_proxy, headless=False, xvfb=True, page_load_strategy="eager") as sb:
+                # Добавили флаги disable_dev_shm_usage=True и no_sandbox=True для жесткой экономии ОЗУ
+                with SB(
+                    uc=True, 
+                    proxy=sb_proxy, 
+                    headless=False, 
+                    xvfb=True, 
+                    page_load_strategy="eager",
+                    disable_dev_shm_usage=True,
+                    no_sandbox=True
+                ) as sb:
                     sb.driver.get(url)
                     time.sleep(random.uniform(2.0, 4.0))
                     
