@@ -40,33 +40,23 @@ class Items:
 
             items = []
             
-            # Ищем все JSON объекты внутри скриптов или тегов __NEXT_DATA__
-            # Современный Vinted часто использует Next.js и прячет данные в id="__NEXT_DATA__"
-            next_data_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', response.text, re.DOTALL)
-            
-            scripts_content = []
-            if next_data_match:
-                scripts_content.append(next_data_match.group(1))
-            
-            # Также собираем стандартные application/json скрипты
-            other_scripts = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', response.text, re.DOTALL | re.IGNORECASE)
-            scripts_content.extend(other_scripts)
+            # Ищем все application/json скрипты
+            scripts_content = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', response.text, re.DOTALL | re.IGNORECASE)
 
             for script_content in scripts_content:
                 try:
                     data = json_module.loads(script_content)
                     if isinstance(data, dict):
-                        # Рекурсивно или точечно ищем ключи, где могут быть товары
+                        # ДИАГНОСТИКА: Выводим главные ключи первого крупного JSON в лог
+                        if len(data.keys()) > 2:
+                            logger.info(f"DEBUG JSON Keys found: {list(data.keys())}")
+                        
                         found_items = self._extract_items_recursive(data)
                         if found_items:
                             items = found_items
                             break
                 except (json_module.JSONDecodeError, TypeError):
                     continue
-
-            # Если ничего не нашли через скрипты, выведем в логи подсказку
-            if not items and scripts_content:
-                logger.info("DEBUG: Страница загружена, но ключи товаров не совпали. Проверяем структуру...")
 
             if not json:
                 return [Item(_item) for _item in items]
@@ -77,14 +67,13 @@ class Items:
             raise HTTPError(f"Error scraping HTML: {err}")
 
     def _extract_items_recursive(self, data):
-        """Вспомогательная функция для поиска массива товаров в любом месте JSON"""
         if isinstance(data, dict):
-            # Проверяем стандартные ключи
-            for key in ['items', 'catalogItems', 'products']:
+            # Проверяем расширенный список возможных ключей товаров
+            for key in ['items', 'catalogItems', 'products', 'catalog_items', 'edges', 'nodes']:
                 if key in data and isinstance(data[key], list) and len(data[key]) > 0:
-                    if isinstance(data[key][0], dict) and ('id' in data[key][0] or 'title' in data[key][0] or 'price' in data[key][0]):
+                    sample = data[key][0]
+                    if isinstance(sample, dict) and any(k in sample for k in ['id', 'title', 'price', 'url']):
                         return data[key]
-            # Ищем глубже по словарям
             for k, v in data.items():
                 res = self._extract_items_recursive(v)
                 if res:
