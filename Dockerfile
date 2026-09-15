@@ -19,15 +19,16 @@ RUN groupadd -g ${APP_GID} ${APP_USER} \
  && mkdir -p /app/data /app/logs
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+ && seleniumbase get chromedriver
 
-RUN seleniumbase get chromedriver
+# --- ХИТРОСТЬ ПРОТИВ READ-ONLY: Делаем ярлык папки драйверов на /tmp ---
+RUN mv /usr/local/lib/python3.11/site-packages/seleniumbase/drivers /usr/local/lib/python3.11/site-packages/seleniumbase/drivers_orig \
+ && ln -s /tmp/sb_drivers /usr/local/lib/python3.11/site-packages/seleniumbase/drivers
 
 COPY . .
 
-# ДАЕМ ПРАВА: на папку бота И на системную папку SeleniumBase
-RUN chown -R ${APP_USER}:${APP_USER} /app \
- && chown -R ${APP_USER}:${APP_USER} /usr/local/lib/python3.11/site-packages/seleniumbase
+RUN chown -R ${APP_USER}:${APP_USER} /app
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
