@@ -50,22 +50,17 @@ class Requester:
 
             old_cwd = os.getcwd()
             try:
-                # Оставляем переход в /tmp на случай, если uc_driver захочет что-то кэшировать
                 os.chdir("/tmp")
                 
-                # Используем headless=False, так как виртуальный монитор обеспечит xvfb-run
-                # page_load_strategy="eager" заставит скрипт не ждать загрузки тяжелых картинок и трекеров
-                with SB(uc=True, proxy=sb_proxy, headless=False, page_load_strategy="eager") as sb:
+                # xvfb=True вернулся! Он сработает, так как мы добавили xauth и память 2GB
+                with SB(uc=True, proxy=sb_proxy, headless=False, xvfb=True, page_load_strategy="eager") as sb:
                     sb.driver.get(url)
-                    
-                    # Сокращенная пауза: ждем от 2 до 4 секунд вместо 5-8
                     time.sleep(random.uniform(2.0, 4.0))
                     
                     html = sb.driver.page_source
                     
                     if "datadome" in html.lower() and "Just a moment" in html:
                         logger.warning(f"Datadome challenge still present on attempt {tried}")
-                        # Если попали на капчу, ждем чуть-чуть и пробуем снова
                         time.sleep(random.uniform(1.0, 2.0))
                         continue
                         
@@ -76,7 +71,6 @@ class Requester:
             finally:
                 os.chdir(old_cwd)
             
-            # Сокращенная пауза между попытками
             time.sleep(random.uniform(0.5, 1.5))
 
         from requests.exceptions import HTTPError
