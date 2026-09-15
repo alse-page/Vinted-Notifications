@@ -4,14 +4,12 @@ ARG APP_UID=10001
 ARG APP_GID=10001
 ARG APP_USER=appuser
 
-# Заставляем логи выводиться мгновенно и даем временный "дом"
 ENV PYTHONUNBUFFERED=1
-ENV HOME=/tmp
 
 WORKDIR /app
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends gosu wget gnupg xvfb xauth curl unzip ca-certificates \
+ && apt-get install -y --no-install-recommends gosu wget gnupg curl unzip ca-certificates \
  && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
  && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
  && apt-get update \
@@ -26,6 +24,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && seleniumbase get chromedriver
 
+# Разрешаем нашему пользователю писать в папку SeleniumBase для создания uc_driver
+RUN chown -R ${APP_USER}:${APP_USER} /usr/local/lib/python3.11/site-packages/seleniumbase
+
 COPY . .
 
 RUN chown -R ${APP_USER}:${APP_USER} /app
@@ -37,6 +38,4 @@ EXPOSE 8000
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-
-# Вернули обычный запуск Питона (без xvfb-run)
 CMD ["python", "vinted_notifications.py"]
