@@ -13,18 +13,9 @@ _PROXY_CACHE_INITIALIZED = False
 _SINGLE_PROXY = None
 
 _TEST_URL = "https://www.vinted.fr/"
-_TEST_TIMEOUT = 2
+_TEST_TIMEOUT = 5
 MAX_PROXY_WORKERS = 10
-# CHANGED: было 6 часов — слишком долго держим потенциально спалённые прокси.
-# Снижаем до 30 минут, пока не убедимся, что детекция прокси надёжна.
-PROXY_RECHECK_INTERVAL = 30 * 60
-
-# Маркеры Datadome-challenge — те же, что используются в requester.py
-CHALLENGE_MARKERS = [
-    "datadome", "Datadome", "captcha-delivery.com",
-    "Just a moment", "Checking your browser",
-    "Access denied", "Attention Required",
-]
+PROXY_RECHECK_INTERVAL = 6 * 60 * 60
 
 
 def fetch_proxies_from_link(url: str) -> List[str]:
@@ -49,11 +40,8 @@ def check_proxies_parallel(proxies_list: List[str]) -> List[str]:
                 is_working = future.result()
                 if is_working:
                     working_proxies.append(proxy)
-                else:
-                    logger.warning(f"DEBUG proxy check FAILED (challenge or bad status): {proxy}")
-            except Exception as e:
-                logger.warning(f"DEBUG proxy check EXCEPTION for {proxy}: {e}")
-    logger.warning(f"DEBUG proxy check result: {len(working_proxies)}/{len(proxies_list)} passed")
+            except Exception:
+                pass
     return working_proxies
 
 
@@ -96,9 +84,6 @@ def get_random_proxy() -> Optional[str]:
     if proxy_list:
         all_proxies = [p.strip() for p in proxy_list.split(";") if p.strip()]
 
-    # DEBUG: сколько прокси реально сконфигурировано
-    logger.warning(f"DEBUG configured proxy count: {len(all_proxies)} -> {all_proxies}")
-
     proxy_list_link = db.get_parameter("proxy_list_link")
     if proxy_list_link:
         link_proxies = fetch_proxies_from_link(proxy_list_link)
@@ -108,25 +93,15 @@ def get_random_proxy() -> Optional[str]:
         check_proxies = db.get_parameter("check_proxies") == "True"
         if check_proxies:
             working_proxies = check_proxies_parallel(all_proxies)
-            if working_proxies:
-                _PROXY_CACHE = working_proxies
-                if len(working_proxies) == 1:
-                    _SINGLE_PROXY = working_proxies[0]
-                    return _SINGLE_PROXY
-                return random.choice(working_proxies)
-            else:
-                # ВАЖНО: если проверка не прошла ни одна, но прокси всё равно
-                # единственный доступный вариант — используем его, а не идём
-                # "голым" с IP самого сервера (это ещё хуже для антибота).
-                logger.warning(
-                    "DEBUG: ALL proxies failed the challenge-aware check! "
-                    "Using them anyway since there's no better fallback than going proxy-less."
-                )
-                _PROXY_CACHE = all_proxies
-                if len(all_proxies) == 1:
-                    _SINGLE_PROXY = all_proxies[0]
-                    return _SINGLE_PROXY
-                return random.choice(all_proxies)
+            # Если ни один не прошёл простую проверку статус-кода, всё равно
+            # используем весь список — единственная альтернатива (без прокси
+            # вообще, с IP самого сервера) почти наверняка хуже.
+            pool = working_proxies if working_proxies else all_proxies
+            _PROXY_CACHE = pool
+            if len(pool) == 1:
+                _SINGLE_PROXY = pool[0]
+                return _SINGLE_PROXY
+            return random.choice(pool)
         else:
             _PROXY_CACHE = all_proxies
             if len(all_proxies) == 1:
@@ -139,6 +114,9 @@ def get_random_proxy() -> Optional[str]:
 
 
 def check_proxy(proxy: str) -> bool:
+    """Простая проверка: прокси считается рабочим, если через него вообще
+    получаем ответ с кодом 200 от Vinted (не проверяем содержимое — это
+    оказалось ненадёжным индикатором и создавало ложные срабатывания)."""
     if proxy is None:
         return False
 
@@ -164,18 +142,8 @@ def check_proxy(proxy: str) -> bool:
         }
         session.headers.update(headers)
 
-        # CHANGED: GET вместо HEAD, чтобы видеть тело ответа и отличить
-        # реальную страницу от Datadome-challenge (у него тоже status 200).
-        response = session.get(_TEST_URL, proxies=proxy_dict, timeout=_TEST_TIMEOUT + 3)
-
-        if response.status_code != 200:
-            return False
-
-        text_sample = response.text[:20000]
-        if any(marker in text_sample for marker in CHALLENGE_MARKERS):
-            return False
-
-        return True
+        response = session.get(_TEST_URL, proxies=proxy_dict, timeout=_TEST_TIMEOUT)
+        return response.status_code == 200
     except (RequestException, ConnectionError, TimeoutError):
         return False
     finally:
@@ -188,15 +156,12 @@ def convert_proxy_string_to_dict(proxy: Optional[str]) -> dict:
         return {}
 
     if "://" in proxy:
-        protocol, address = proxy.split("://")
-        # ВАЖНО: даже если в строке была указана схема "https://", реальное
-        # соединение К ПРОКСИ должно идти по обычному HTTP (прокси сам туннелирует
-        # HTTPS-трафик через CONNECT). Использование "https://" здесь заставляет
-        # клиент пытаться сделать TLS-рукопожатие с самим прокси-сервером,
-        # который слушает как plain HTTP proxy -> WRONG_VERSION_NUMBER.
+        _protocol, address = proxy.split("://")
+        # Схема к самому прокси всегда http:// — прокси сам туннелирует
+        # HTTPS через CONNECT, установка "https://" вызывает попытку TLS
+        # прямо к прокси-серверу и падает с WRONG_VERSION_NUMBER.
         return {"http": f"http://{address}", "https": f"http://{address}"}
     else:
-        # Без схемы вообще — тот же самый случай, оба ключа должны быть http://
         return {"http": f"http://{proxy}", "https": f"http://{proxy}"}
 
 
@@ -210,9 +175,6 @@ def configure_proxy(session, proxy: Optional[str] = None) -> bool:
 
     if isinstance(proxy, str):
         proxy = convert_proxy_string_to_dict(proxy)
-
-    session.proxies.update(proxy)
-    return True
 
     session.proxies.update(proxy)
     return True
