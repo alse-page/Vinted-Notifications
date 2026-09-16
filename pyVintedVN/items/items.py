@@ -1,21 +1,23 @@
 from pyVintedVN.items.item import Item
 from pyVintedVN.requester import requester
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+from urllib.parse import urlparse, parse_qsl
 from requests.exceptions import HTTPError
 from typing import List, Dict, Optional
 from pyVintedVN.settings import Urls
-import json as json_module
-import re
-import logging
-import os
-
-logger = logging.getLogger(__name__)
-
-# Куда сохранять сырой HTML при пустой выдаче (для диагностики)
-DEBUG_DUMP_PATH = "/app/logs/last_response_debug.html"
 
 
 class Items:
+    """
+    A class for searching and retrieving items from Vinted.
+
+    This class provides methods to search for items on Vinted using a search URL
+    and to parse Vinted search URLs into API parameters.
+
+    Example:
+        >>> items = Items()
+        >>> results = items.search("https://www.vinted.fr/catalog?search_text=shoes")
+    """
+
     def search(
         self,
         url: str,
@@ -24,140 +26,140 @@ class Items:
         time: Optional[int] = None,
         json: bool = False,
     ) -> List[Item]:
+        """
+        Retrieve items from a given search URL on Vinted.
 
+        Args:
+            url (str): The URL of the search on Vinted.
+            nbr_items (int, optional): Number of items to be returned. Defaults to 20.
+            page (int, optional): Page number to be returned. Defaults to 1.
+            time (int, optional): Timestamp to filter items by time. Defaults to None. Looks like it doesn't work though.
+            json (bool, optional): Whether to return raw JSON data instead of Item objects.
+                Defaults to False.
+
+        Returns:
+            List[Item]: A list of Item objects.
+
+        Raises:
+            HTTPError: If the request to the Vinted API fails.
+        """
+        # Extract the domain from the URL and set the locale
         locale = urlparse(url).netloc
         requester.set_locale(locale)
 
-        parsed_url = urlparse(url)
-        query_params = dict(parse_qsl(parsed_url.query))
-        query_params['page'] = str(page)
-        query_params['per_page'] = str(nbr_items)
+        # Parse the URL to get the API parameters
+        params = self.parse_url(url, nbr_items, page, time)
 
-        new_query = urlencode(query_params)
-        target_url = urlunparse(parsed_url._replace(query=new_query))
+        # Construct the API URL. The catalogue moved to a dedicated host
+        # (api.vinted.<tld>) and no longer answers on the www host.
+        api_url = (
+            f"https://{requester.get_api_host()}"
+            f"{Urls.VINTED_API_URL}/{Urls.VINTED_PRODUCTS_ENDPOINT}"
+        )
 
         try:
-            response = requester.get(url=target_url)
-            if not response or not hasattr(response, 'text'):
-                raise HTTPError("Empty response from requester")
-
+            # Make the request to the Vinted API
+            response = requester.get(url=api_url, params=params)
             response.raise_for_status()
 
-            html = response.text
-            items = []
+            # Parse the response
+            items = response.json()
+            items = items["items"]
 
-            # Современный Vinted прячет все данные страницы в скрипте с id="__NEXT_DATA__"
-            match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
-            if match:
-                try:
-                    data = json_module.loads(match.group(1))
-                    items = self._find_items_in_json(data)
-                except Exception as e:
-                    logger.error(f"Error parsing Next.js JSON: {e}")
-
-            # Запасной вариант: ищем любые другие json скрипты, если в __NEXT_DATA__ пусто
-            if not items:
-                scripts_content = re.findall(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
-                for script in scripts_content:
-                    try:
-                        data = json_module.loads(script)
-                        items = self._find_items_in_json(data)
-                        if items:
-                            break
-                    except Exception:
-                        continue
-
-            # ================= ДИАГНОСТИКА v2 (можно удалить после фикса) =================
-            if not items:
-                title_match = re.search(r'<title[^>]*>(.*?)</title>', html, re.DOTALL | re.IGNORECASE)
-                title = title_match.group(1).strip()[:200] if title_match else None
-
-                # Ищем контекст вокруг первого упоминания datadome/captcha, чтобы понять,
-                # это реальный челлендж или просто штатный тег защиты на легитимной странице
-                dd_idx = html.lower().find("datadome")
-                dd_context = html[max(0, dd_idx - 150):dd_idx + 150] if dd_idx != -1 else None
-
-                markers = {
-                    "title": title,
-                    "has_next_data_tag": "__NEXT_DATA__" in html,
-                    "has_react_on_rails": "data-js-react-on-rails-store" in html,
-                    "has_datadome": ("datadome" in html.lower()),
-                    "has_captcha": ("captcha" in html.lower()),
-                    "has_challenge_words": any(w in html for w in ["Just a moment", "Checking your browser", "Access denied", "Attention Required"]),
-                    "has_any_json_script": bool(re.findall(r'<script[^>]*type="application/json"', html, re.IGNORECASE)),
-                    # Признаки того, что это МОЖЕТ быть настоящая страница с товарами,
-                    # просто в другом формате, чем мы ищем
-                    "contains_price_word": '"price"' in html or "'price'" in html,
-                    "contains_catalog_items_word": "catalogItems" in html or "catalog_items" in html,
-                    "script_tag_count": html.count("<script"),
-                    "status_code": response.status_code,
-                    "response_headers": dict(response.headers),
-                    "html_length": len(html),
-                }
-                logger.warning(f"DEBUG EMPTY RESULT for {target_url} -> {markers}")
-                if dd_context:
-                    logger.warning(f"DEBUG datadome context: ...{dd_context}...")
-
-                try:
-                    os.makedirs(os.path.dirname(DEBUG_DUMP_PATH), exist_ok=True)
-                    with open(DEBUG_DUMP_PATH, "w", encoding="utf-8") as f:
-                        f.write(html)
-                    logger.warning(f"DEBUG raw html saved to {DEBUG_DUMP_PATH}")
-                except Exception as e:
-                    logger.warning(f"DEBUG could not save html dump: {e}")
-            # ================= /ДИАГНОСТИКА =================
-
+            # Return either Item objects or raw JSON data
             if not json:
-                return [Item(_item) for _item in items]
+                return [Item(_item, locale) for _item in items]
             else:
                 return items
 
-        except Exception as err:
-            raise HTTPError(f"HTML scraping failed: {err}")
-
-    def _find_items_in_json(self, data):
-        """Рекурсивно ищет ключи с товарами в структуре JSON"""
-        if isinstance(data, dict):
-            for key in ['items', 'catalogItems', 'products']:
-                if key in data and isinstance(data[key], list) and len(data[key]) > 0:
-                    sample = data[key][0]
-                    if isinstance(sample, dict) and ('id' in sample or 'title' in sample or 'price' in sample):
-                        return data[key]
-            for v in data.values():
-                res = self._find_items_in_json(v)
-                if res:
-                    return res
-        elif isinstance(data, list):
-            for item in data:
-                res = self._find_items_in_json(item)
-                if res:
-                    return res
-        return []
+        except HTTPError as err:
+            raise err
 
     def parse_url(
         self, url: str, nbr_items: int = 20, page: int = 1, time: Optional[int] = None
     ) -> Dict:
+        """
+        Parse a Vinted search URL to get parameters for the API call.
+
+        Args:
+            url (str): The URL of the search on Vinted.
+            nbr_items (int, optional): Number of items to be returned. Defaults to 20.
+            page (int, optional): Page number to be returned. Defaults to 1.
+            time (int, optional): Timestamp to filter items by time. Defaults to None.
+
+        Returns:
+            Dict: A dictionary of parameters for the Vinted API.
+        """
+        # Parse the query parameters from the URL
         queries = parse_qsl(urlparse(url).query)
+
+        # Construct the parameters dictionary. The id filters were renamed to
+        # attribute_ids[<singular>] with the September 2026 API move; the old
+        # *_ids names are still accepted but silently ignored, which returns
+        # unfiltered results rather than an error.
         params = {
-            "search_text": "+".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "search_text"])),
-            "video_game_platform_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "video_game_platform_ids[]"])),
-            "catalog_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "catalog[]"])),
-            "color_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "color_ids[]"])),
-            "brand_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "brand_ids[]"])),
-            "size_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "size_ids[]"])),
-            "material_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "material_ids[]"])),
-            "status_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "status_ids[]"])),
-            "country_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "country_ids[]"])),
-            "city_ids": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "city_ids[]"])),
-            "is_for_swap": ",".join(map(str, [1 for tpl in queries if tpl[0] == "disposal[]"])),
-            "currency": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "currency"])),
-            "price_to": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "price_to"])),
-            "price_from": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "price_from"])),
+            "search_text": "+".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "search_text"])
+            ),
+            "attribute_ids[video_game_platform]": ",".join(
+                map(
+                    str,
+                    [
+                        tpl[1]
+                        for tpl in queries
+                        if tpl[0] == "video_game_platform_ids[]"
+                    ],
+                )
+            ),
+            "attribute_ids[catalog]": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "catalog[]"])
+            ),
+            "attribute_ids[color]": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "color_ids[]"])
+            ),
+            "attribute_ids[brand]": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "brand_ids[]"])
+            ),
+            "attribute_ids[size]": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "size_ids[]"])
+            ),
+            "attribute_ids[material]": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "material_ids[]"])
+            ),
+            "attribute_ids[status]": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "status_ids[]"])
+            ),
+            # country and city have no working attribute_ids equivalent: the new
+            # names are accepted but match nothing, so zeroing a query is worse
+            # than the old names simply being ignored.
+            "country_ids": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "country_ids[]"])
+            ),
+            "city_ids": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "city_ids[]"])
+            ),
+            "is_for_swap": ",".join(
+                map(str, [1 for tpl in queries if tpl[0] == "disposal[]"])
+            ),
+            "currency": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "currency"])
+            ),
+            "price_to": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "price_to"])
+            ),
+            "price_from": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "price_from"])
+            ),
             "page": page,
             "per_page": nbr_items,
-            "order": ",".join(map(str, [tpl[1] for tpl in queries if tpl[0] == "order"])),
+            "order": ",".join(
+                map(str, [tpl[1] for tpl in queries if tpl[0] == "order"])
+            ),
             "time": time,
         }
-        return params
 
+        # The legacy API ignored blank filters; svc-catalogue answers 400 to them.
+        return {k: v for k, v in params.items() if v not in ("", None)}
+
+    # Aliases for backward compatibility
     parseUrl = parse_url
