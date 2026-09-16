@@ -92,10 +92,10 @@ class Requester:
         if csrf_token:
             headers["X-Csrf-Token"] = csrf_token
 
-        if self.debug or not csrf_token:
-            logger.warning(
-                f"DEBUG auth headers: has_token={bool(token)} has_anon_id={bool(anon_id)} "
-                f"has_csrf={bool(csrf_token)} all_cookie_names={list(self.session.cookies.keys())}"
+        if self.debug:
+            logger.debug(
+                f"Auth headers: has_token={bool(token)} has_anon_id={bool(anon_id)} "
+                f"has_csrf={bool(csrf_token)}"
             )
 
         return headers
@@ -162,12 +162,13 @@ class Requester:
             resp = self.session.get(self.VINTED_AUTH_URL, impersonate=IMPERSONATE_TARGET)
             if not self.session.cookies.get("access_token_web"):
                 logger.warning(
-                    f"No access_token_web cookie returned by {self.VINTED_AUTH_URL}"
+                    f"No access_token_web cookie returned by {self.VINTED_AUTH_URL} "
+                    f"(status={resp.status_code})"
                 )
-            logger.warning(
-                f"DEBUG set_cookies: status={resp.status_code} "
-                f"cookies_received={list(self.session.cookies.keys())}"
-            )
+            elif self.debug:
+                logger.debug(
+                    f"Cookies set: {list(self.session.cookies.keys())}"
+                )
         except Exception:
             if self.debug:
                 logger.error(
