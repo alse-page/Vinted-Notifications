@@ -4,7 +4,7 @@ import sys
 import os
 import db
 import random
-import requests
+from curl_cffi import requests
 from requests.exceptions import HTTPError
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -12,6 +12,9 @@ from logger import get_logger
 from pyVintedVN.settings import Urls
 
 logger = get_logger(__name__)
+
+# Какую версию Chrome подделывать при TLS-рукопожатии
+IMPERSONATE_TARGET = "chrome124"
 
 
 class Requester:
@@ -22,7 +25,10 @@ class Requester:
         self.locale = "www.vinted.fr"
         self.VINTED_AUTH_URL = f"https://{self.locale}/"
         self.MAX_RETRIES = 3
-        self.session = requests.Session()
+        # CHANGED: curl_cffi вместо голого requests — подделывает TLS/JA3
+        # отпечаток под настоящий Chrome. Без этого даже запрос за куками
+        # к главной странице блокируется с 403 и без единой куки.
+        self.session = requests.Session(impersonate=IMPERSONATE_TARGET)
         self.debug = debug
         self._refresh_headers()
 
@@ -107,7 +113,7 @@ class Requester:
         while tried < self.MAX_RETRIES:
             tried += 1
             with self.session.get(
-                url, params=params, headers=self._auth_headers()
+                url, params=params, headers=self._auth_headers(), impersonate=IMPERSONATE_TARGET
             ) as response:
                 if response.status_code == 200:
                     return response
@@ -125,7 +131,7 @@ class Requester:
                             f"Response body (first 500 chars): {response.text[:500]}"
                         )
                         new_session = True
-                        self.session = requests.Session()
+                        self.session = requests.Session(impersonate=IMPERSONATE_TARGET)
                         self._refresh_headers()
                         proxy_configured = proxies.configure_proxy(self.session)
                         self.set_cookies()
@@ -146,17 +152,14 @@ class Requester:
         if self.debug and proxy_configured:
             logger.debug(f"Using proxy: {self.session.proxies}")
 
-        response = self.session.post(url, params)
+        response = self.session.post(url, data=params, impersonate=IMPERSONATE_TARGET)
         response.raise_for_status()
         return response
 
     def set_cookies(self):
-        self.session.cookies.clear_session_cookies()
+        self.session.cookies.clear()
         try:
-            # CHANGED: GET вместо HEAD — некоторые сайты выставляют CSRF-куку
-            # только на полном ответе, а не на HEAD (реализация зависит от
-            # того, где именно сервер решает выставлять Set-Cookie).
-            resp = self.session.get(self.VINTED_AUTH_URL)
+            resp = self.session.get(self.VINTED_AUTH_URL, impersonate=IMPERSONATE_TARGET)
             if not self.session.cookies.get("access_token_web"):
                 logger.warning(
                     f"No access_token_web cookie returned by {self.VINTED_AUTH_URL}"
