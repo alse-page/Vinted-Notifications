@@ -4,16 +4,11 @@ ARG APP_UID=10001
 ARG APP_GID=10001
 ARG APP_USER=appuser
 
-ENV PYTHONUNBUFFERED=1
-
 WORKDIR /app
 
+# Устанавливаем только самые базовые утилиты
 RUN apt-get update \
- && apt-get install -y --no-install-recommends gosu wget gnupg curl unzip ca-certificates \
- && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
- && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
- && apt-get update \
- && apt-get install -y google-chrome-stable \
+ && apt-get install -y --no-install-recommends gosu curl \
  && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g ${APP_GID} ${APP_USER} \
@@ -21,11 +16,8 @@ RUN groupadd -g ${APP_GID} ${APP_USER} \
  && mkdir -p /app/data /app/logs
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
- && seleniumbase get chromedriver
-
-# Разрешаем нашему пользователю писать в папку SeleniumBase для создания uc_driver
-RUN chown -R ${APP_USER}:${APP_USER} /usr/local/lib/python3.11/site-packages/seleniumbase
+# Ставим только питоновские пакеты, никакой установки chromedriver!
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
