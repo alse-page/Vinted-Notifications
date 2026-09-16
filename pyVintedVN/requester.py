@@ -112,36 +112,36 @@ class Requester:
         new_session = False
         while tried < self.MAX_RETRIES:
             tried += 1
-            with self.session.get(
+            response = self.session.get(
                 url, params=params, headers=self._auth_headers(), impersonate=IMPERSONATE_TARGET
-            ) as response:
-                if response.status_code == 200:
-                    return response
-                elif response.status_code in (401, 403) and tried < self.MAX_RETRIES:
-                    logger.warning(
-                        f"Token rejected ({response.status_code}), refreshing {tried}/{self.MAX_RETRIES}. "
-                        f"Body (first 300 chars): {response.text[:300]}"
+            )
+            if response.status_code == 200:
+                return response
+            elif response.status_code in (401, 403) and tried < self.MAX_RETRIES:
+                logger.warning(
+                    f"Token rejected ({response.status_code}), refreshing {tried}/{self.MAX_RETRIES}. "
+                    f"Body (first 300 chars): {response.text[:300]}"
+                )
+                self.set_cookies()
+            elif tried == self.MAX_RETRIES:
+                if response.status_code in (401, 403) and not new_session:
+                    logger.error(
+                        f"Received {response.status_code} error for URL: {url}\n"
+                        f"Response headers: {dict(response.headers)}\n"
+                        f"Response body (first 500 chars): {response.text[:500]}"
                     )
+                    new_session = True
+                    self.session = requests.Session(impersonate=IMPERSONATE_TARGET)
+                    self._refresh_headers()
+                    proxy_configured = proxies.configure_proxy(self.session)
                     self.set_cookies()
-                elif tried == self.MAX_RETRIES:
-                    if response.status_code in (401, 403) and not new_session:
-                        logger.error(
-                            f"Received {response.status_code} error for URL: {url}\n"
-                            f"Response headers: {dict(response.headers)}\n"
-                            f"Response body (first 500 chars): {response.text[:500]}"
+                    if self.debug:
+                        logger.debug(
+                            f"Session reset due to {response.status_code} error"
                         )
-                        new_session = True
-                        self.session = requests.Session(impersonate=IMPERSONATE_TARGET)
-                        self._refresh_headers()
-                        proxy_configured = proxies.configure_proxy(self.session)
-                        self.set_cookies()
-                        if self.debug:
-                            logger.debug(
-                                f"Session reset due to {response.status_code} error"
-                            )
-                        tried = 0
-                        continue
-                    return response
+                    tried = 0
+                    continue
+                return response
 
         raise HTTPError(
             f"Failed to get a valid response after {self.MAX_RETRIES} attempts"
