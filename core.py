@@ -283,29 +283,39 @@ def process_items(queue):
     """
     Process all queries from the database, search for items, and put them in the queue.
     Uses the global items_queue by default, but can accept a custom queue for backward compatibility.
-
-    Args:
-        queue (Queue, optional): The queue to put the items in. Defaults to the global items_queue.
-
-    Returns:
-        None
     """
 
     all_queries = db.get_queries()
-
-    # Initialize Vinted
     vinted = Vinted()
-
-    # Get the number of items per query from the database
     items_per_query = int(db.get_parameter("items_per_query"))
 
-    # for each keyword we parse data
     for query in all_queries:
-        all_items = vinted.items.search(query[1], nbr_items=items_per_query)
-        # Filter to only include new items. This should reduce the amount of db calls.
-        data = [item for item in all_items if item.is_new_item()]
-        queue.put((data, query[0]))
-        logger.info(f"Scraped {len(data)} items for query: {query[1]}")
+        query_url = query[1]
+        all_items = vinted.items.search(query_url, nbr_items=items_per_query)
+        
+        # Вытаскиваем искомое слово из ссылки (если оно там есть)
+        parsed_url = urlparse(query_url)
+        query_params = parse_qs(parsed_url.query)
+        search_text_list = query_params.get("search_text", [])
+        search_keyword = search_text_list[0].lower() if search_text_list else None
+
+        data = []
+        for item in all_items:
+            if not item.is_new_item():
+                continue
+                
+            # ЖЕСТКИЙ ФИЛЬТР: Если есть ключевое слово, оно обязано быть в заголовке или бренде
+            if search_keyword:
+                title_and_brand = f"{item.title} {item.brand_title or ''}".lower()
+                # Если искомого слова нет в тексте — выбрасываем товар
+                if search_keyword not in title_and_brand:
+                    continue
+
+            data.append(item)
+            
+        if data:
+            queue.put((data, query[0]))
+            logger.info(f"Scraped {len(data)} items for query: {query_url}")
 
 
 def clear_item_queue(items_queue, new_items_queue):
